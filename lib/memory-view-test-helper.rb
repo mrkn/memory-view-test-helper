@@ -4,7 +4,7 @@ require "set"
 
 module MemoryViewTestHelper
   class NDArray
-    def self.try_convert(obj, dtype: nil)
+    def self.try_convert(obj, dtype: nil, order: :row_major)
       begin
         ary = obj.to_ary
       rescue TypeError
@@ -12,7 +12,6 @@ module MemoryViewTestHelper
       end
 
       dtype, shape, cache = detect_dtype_and_shape(ary, dtype)
-      #p shape: shape, dtype: dtype, cache: cache
       nar = new(shape, dtype)
       assign_cache(nar, cache)
       return nar
@@ -25,7 +24,21 @@ module MemoryViewTestHelper
           nar[i] = x
         end
       else
+        assign_cache_recursive(nar, [], cache, 0)
       end
+    end
+
+    private_class_method def self.assign_cache_recursive(nar, idx, cache, k)
+      if cache[k][:dim]+1 != nar.ndim
+        cache[k][:ary].each_index do |i|
+          k = assign_cache_recursive(nar, [*idx, i], cache, k+1)
+        end
+      else
+        cache[k][:ary].each_with_index do |x, i|
+          nar[*idx, i] = x
+        end
+      end
+      k
     end
 
     private_class_method def self.detect_dtype_and_shape(ary, dtype)

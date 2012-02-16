@@ -471,6 +471,24 @@ ndarray_set_value(uint8_t *value_ptr, const ndarray_dtype_t dtype, const VALUE v
 }
 
 static VALUE
+ndarray_md_aset(ndarray_t *nar, ssize_t *indices, VALUE val)
+{
+  assert(nar != NULL);
+  assert(indices != NULL);
+
+  /* assume the size of indices equals to nar->ndim */
+  const ssize_t ndim = nar->ndim;
+
+  uint8_t *value_ptr = nar->data;
+  ssize_t i;
+  for (i = 0; i < ndim; ++i) {
+    value_ptr += indices[i] * nar->strides[i];
+  }
+
+  return ndarray_set_value(value_ptr, nar->dtype, val);
+}
+
+static VALUE
 ndarray_aset(int argc, VALUE *argv, VALUE obj)
 {
   ndarray_t *nar;
@@ -485,14 +503,28 @@ ndarray_aset(int argc, VALUE *argv, VALUE obj)
   const VALUE val = argv[argc-1];
   const int item_size = SIZEOF_DTYPE(nar->dtype);
 
-  if (nar->ndim == 1) {
+  const ssize_t ndim = nar->ndim;
+  if (ndim == 1) {
     /* special case for 1-D array */
     ssize_t i = NUM2SSIZET(argv[0]);
     uint8_t *p = ((uint8_t *)nar->data) + i * item_size;
     return ndarray_set_value(p, nar->dtype, val);
   }
 
-  rb_raise(rb_eNotImpError, "multi-dimensional aset is unsupported now");
+  ssize_t indices[MAX_INLINE_DIM] = { 0, };
+
+  if (ndim > MAX_INLINE_DIM) {
+    rb_raise(rb_eNotImpError, "ndim > %d is unsupported now", MAX_INLINE_DIM);
+  }
+
+  ssize_t i;
+  for (i = 0; i < ndim; ++i) {
+    indices[i] = NUM2SSIZET(argv[i]);
+  }
+
+  VALUE res = ndarray_md_aset(nar, indices, val);
+
+  return res;
 }
 
 void
