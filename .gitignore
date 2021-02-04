@@ -1,0 +1,10 @@
+Gemfile.lock
+*.bundle
+*.dll
+*.dylib
+*.exe
+*.o
+*.obj
+*.S
+*.so
+*~
