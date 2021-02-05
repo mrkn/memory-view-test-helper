@@ -1,3 +1,6 @@
+ext/**/Makefile
+ext/**/mkmf.log
+pkg/
 Gemfile.lock
 *.bundle
 *.dll
