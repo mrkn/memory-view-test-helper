@@ -27,6 +27,9 @@ Gem::Specification.new do |spec|
     "#{spec.name}.gemspec",
   ]
   spec.files += Dir.glob("lib/**/*.rb")
+  spec.files += Dir.glob("ext/**/*.{c,h,rb}")
+  spec.files += Dir.glob("ext/**/depend")
+  spec.extensions = ["ext/memory-view-test-helper/extconf.rb"]
 
   spec.add_development_dependency("bundler")
   spec.add_development_dependency("rake")
