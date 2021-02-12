@@ -1,5 +1,99 @@
 #include <ruby.h>
 
+#include <float.h>
+#include <limits.h>
+
+#define NUM2INT8(num) num2int8(num)
+#define NUM2UINT8(num) num2uint8(num)
+#define NUM2INT16(num) num2int16(num)
+#define NUM2UINT16(num) num2uint16(num)
+#if SIZEOF_INT32_T == SIZEOF_INT
+#   define NUM2INT32(num) ((int32_t)NUM2INT(num))
+#   define NUM2UINT32(num) ((uint32_t)NUM2UINT(num))
+#elif SIZEOF_INT32_T == SIZEOF_LONG
+#   define NUM2INT32(num) ((int32_t)NUM2LONG(num))
+#   define NUM2UINT32(num) ((uint32_t)NUM2LLONG(num))
+#else
+#   define NUM2INT32(num) num2int32(num)
+#   define NUM2UINT32(num) num2uint32(num)
+static int32_t
+num2int32(VALUE num)
+{
+  return (int32_t)int_range_check(NUM2LONG(num), INT32_MIN, INT32_MAX, "int32_t");
+}
+
+static uint32_t
+num2uint32(VALUE num)
+{
+  return (uint32_t)uint_range_check(NUM2ULONG(num), UINT32_MAX, "uint32_t");
+}
+#endif
+#if SIZEOF_INT64_T == SIZEOF_INT
+#   define NUM2INT64(num) ((int64_t)NUM2INT(num))
+#   define NUM2UINT64(num) ((uint64_t)NUM2UINT(num))
+#elif SIZEOF_INT64_T == SIZEOF_LONG
+#   define NUM2INT64(num) ((int64_t)NUM2LONG(num))
+#   define NUM2UINT64(num) ((uint64_t)NUM2ULONG(num))
+#elif SIZEOF_INT64_T == SIZEOF_LONG_LONG
+#   define NUM2INT64(num) ((int64_t)NUM2LL(num))
+#   define NUM2UINT64(num) ((uint64_t)NUM2ULL(num))
+#else
+#   error Unable to define NUM2INT64 and NUM2UINT64
+#endif
+#define NUM2FLT(num) num2flt(num)
+
+static long
+int_range_check(long num, long min, long max, const char *type)
+{
+  if (min <= num && num <= max) return num;
+  rb_raise(rb_eRangeError, "integer %ld too %s to convert to `%s'",
+           num, num < 0 ? "small" : "big", type);
+}
+
+static unsigned long
+uint_range_check(unsigned long num, unsigned long max, const char *type)
+{
+  if (num > max) {
+    rb_raise(rb_eRangeError, "integer %lu too big to convert to `%s'", num, type);
+  }
+  return num;
+}
+
+static int8_t
+num2int8(VALUE num)
+{
+  return (int8_t)int_range_check(NUM2LONG(num), INT8_MIN, INT8_MAX, "int8_t");
+}
+
+static uint8_t
+num2uint8(VALUE num)
+{
+  return (uint8_t)uint_range_check(NUM2ULONG(num), UINT8_MAX, "uint8_t");
+}
+
+static int16_t
+num2int16(VALUE num)
+{
+  return (int16_t)int_range_check(NUM2LONG(num), INT16_MIN, INT16_MAX, "int16_t");
+}
+
+static uint16_t
+num2uint16(VALUE num)
+{
+  return (uint16_t)uint_range_check(NUM2ULONG(num), UINT16_MAX, "uint16_t");
+}
+
+static float
+num2flt(VALUE num)
+{
+  double dbl = NUM2DBL(num);
+  if (dbl < FLT_MIN || FLT_MAX < dbl) {
+    rb_raise(rb_eRangeError, "float %lf too %s to convert to `float'",
+             dbl, dbl < 0 ? "small" : "big");
+  }
+  return (float)dbl;
+}
+
 VALUE mMemoryViewTestHelper;
 VALUE cNDArray;
 
@@ -240,6 +334,119 @@ ndarray_get_shape(VALUE obj)
   return ary;
 }
 
+static VALUE
+ndarray_aref(int argc, VALUE *argv, VALUE obj)
+{
+  ndarray_t *nar;
+  TypedData_Get_Struct(obj, ndarray_t, &ndarray_data_type, nar);
+
+  if (nar->ndim != argc) {
+    rb_raise(rb_eIndexError, "index dimension mismatched (%d for %"PRIdSIZE")", argc, nar->ndim);
+  }
+
+  const int item_size = SIZEOF_DTYPE(nar->dtype);
+
+  if (nar->ndim == 1) {
+    /* special case for 1-D array */
+    ssize_t i = NUM2SSIZET(argv[0]);
+    uint8_t *p = ((uint8_t *)nar->data) + i * item_size;
+    switch (nar->dtype) {
+      case ndarray_dtype_int8:
+        return INT2NUM(*(int8_t *)p);
+      case ndarray_dtype_uint8:
+        return UINT2NUM(*(uint8_t *)p);
+
+      case ndarray_dtype_int16:
+        return INT2NUM(*(int16_t *)p);
+      case ndarray_dtype_uint16:
+        return UINT2NUM(*(uint16_t *)p);
+
+      case ndarray_dtype_int32:
+        return LONG2NUM(*(int32_t *)p);
+      case ndarray_dtype_uint32:
+        return ULONG2NUM(*(uint32_t *)p);
+
+      case ndarray_dtype_int64:
+        return LL2NUM(*(int64_t *)p);
+      case ndarray_dtype_uint64:
+        return ULL2NUM(*(uint64_t *)p);
+
+      case ndarray_dtype_float32:
+        return DBL2NUM(*(float *)p);
+      case ndarray_dtype_float64:
+        return DBL2NUM(*(double *)p);
+
+      default:
+        return Qnil;
+    }
+  }
+
+  rb_raise(rb_eNotImpError, "multi-dimensional aref is unsupported now");
+}
+
+static VALUE
+ndarray_aset(int argc, VALUE *argv, VALUE obj)
+{
+  ndarray_t *nar;
+  TypedData_Get_Struct(obj, ndarray_t, &ndarray_data_type, nar);
+
+  rb_check_frozen(obj);
+
+  if (nar->ndim != argc - 1) {
+    rb_raise(rb_eIndexError, "index dimension mismatched (%d for %"PRIdSIZE")", argc - 1, nar->ndim);
+  }
+
+  const VALUE val = argv[argc-1];
+  const int item_size = SIZEOF_DTYPE(nar->dtype);
+
+  if (nar->ndim == 1) {
+    /* special case for 1-D array */
+    ssize_t i = NUM2SSIZET(argv[0]);
+    uint8_t *p = ((uint8_t *)nar->data) + i * item_size;
+    switch (nar->dtype) {
+      case ndarray_dtype_int8:
+        *(int8_t *)p = NUM2INT8(val);
+        break;
+      case ndarray_dtype_uint8:
+        *(uint8_t *)p = NUM2UINT8(val);
+        break;
+
+      case ndarray_dtype_int16:
+        *(int16_t *)p = NUM2INT16(val);
+        break;
+      case ndarray_dtype_uint16:
+        *(uint16_t *)p = NUM2UINT16(val);
+        break;
+
+      case ndarray_dtype_int32:
+        *(int32_t *)p = NUM2INT32(val);
+      case ndarray_dtype_uint32:
+        *(uint32_t *)p = NUM2UINT32(val);
+
+      case ndarray_dtype_int64:
+        *(int64_t *)p = NUM2INT64(val);
+        break;
+      case ndarray_dtype_uint64:
+        *(uint64_t *)p = NUM2UINT64(val);
+        break;
+
+      case ndarray_dtype_float32:
+        *(float *)p = NUM2FLT(val);
+        break;
+      case ndarray_dtype_float64:
+        *(double *)p = NUM2DBL(val);
+        break;
+
+      default:
+        return Qnil;
+    }
+
+    return val;
+  }
+
+  rb_raise(rb_eNotImpError, "multi-dimensional aset is unsupported now");
+}
+
 void
 Init_memory_view_test_helper(void)
 {
@@ -252,6 +459,8 @@ Init_memory_view_test_helper(void)
   rb_define_method(cNDArray, "dtype", ndarray_get_dtype, 0);
   rb_define_method(cNDArray, "ndim", ndarray_get_ndim, 0);
   rb_define_method(cNDArray, "shape", ndarray_get_shape, 0);
+  rb_define_method(cNDArray, "[]", ndarray_aref, -1);
+  rb_define_method(cNDArray, "[]=", ndarray_aset, -1);
 
   ndarray_dtype_ids[ndarray_dtype_int8] = rb_intern("int8");
   ndarray_dtype_ids[ndarray_dtype_uint8] = rb_intern("uint8");
