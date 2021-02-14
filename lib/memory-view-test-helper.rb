@@ -32,15 +32,22 @@ module MemoryViewTestHelper
       current_dim = ary.length
       shape = []
       cache = []
-      detect_dtype_and_shape_recursive(ary, 0, dtype, shape, cache)
+      _, dtype, shape, cache = detect_dtype_and_shape_recursive(ary, 0, nil, dtype, shape, cache)
+      return dtype, shape, cache
     end
 
-    private_class_method def self.detect_dtype_and_shape_recursive(obj, dim, fixed_dtype, out_shape, conversion_cache)
+    private_class_method def self.detect_dtype_and_shape_recursive(obj, dim, max_dim, fixed_dtype, out_shape, conversion_cache)
       dtype = detect_dtype(obj)
       unless dtype.nil?
         # obj is scalar
         # TODO handle scalar object
-        return dtype, out_shape, conversion_cache
+        if max_dim.nil?
+          max_dim = dim # update max_dim
+        elsif dim != max_dim
+          dim_failed = [dim, max_dim].min
+          raise ArgumentError, "inhomogeneous array detected at the the #{dim_failed}#{ordinal(dim_failed)} dimension"
+        end
+        return max_dim, dtype, out_shape, conversion_cache
       end
 
       # obj is array-like
@@ -57,11 +64,11 @@ module MemoryViewTestHelper
 
       # recursive detection
       ary.each do |sub|
-        dtype_sub, = detect_dtype_and_shape_recursive(sub, dim + 1, fixed_dtype, out_shape, conversion_cache)
+        max_dim, dtype_sub, = detect_dtype_and_shape_recursive(sub, dim + 1, max_dim, fixed_dtype, out_shape, conversion_cache)
         dtype = promote_dtype(dtype, dtype_sub) unless fixed_dtype
       end
 
-      return (fixed_dtype || dtype), out_shape, conversion_cache
+      return max_dim, (fixed_dtype || dtype), out_shape, conversion_cache
     end
 
     private_class_method def self.detect_dtype(obj)
