@@ -97,6 +97,8 @@ num2flt(VALUE num)
 VALUE mMemoryViewTestHelper;
 VALUE cNDArray;
 
+#define MAX_INLINE_DIM 32
+
 typedef enum {
   ndarray_dtype_none = 0,
   ndarray_dtype_int8,
@@ -335,6 +337,58 @@ ndarray_get_shape(VALUE obj)
 }
 
 static VALUE
+ndarray_get_value(const uint8_t *value_ptr, ndarray_dtype_t dtype)
+{
+  switch (dtype) {
+    case ndarray_dtype_int8:
+      return INT2NUM(*(int8_t *)value_ptr);
+    case ndarray_dtype_uint8:
+      return UINT2NUM(*(uint8_t *)value_ptr);
+
+    case ndarray_dtype_int16:
+      return INT2NUM(*(int16_t *)value_ptr);
+    case ndarray_dtype_uint16:
+      return UINT2NUM(*(uint16_t *)value_ptr);
+
+    case ndarray_dtype_int32:
+      return LONG2NUM(*(int32_t *)value_ptr);
+    case ndarray_dtype_uint32:
+      return ULONG2NUM(*(uint32_t *)value_ptr);
+
+    case ndarray_dtype_int64:
+      return LL2NUM(*(int64_t *)value_ptr);
+    case ndarray_dtype_uint64:
+      return ULL2NUM(*(uint64_t *)value_ptr);
+
+    case ndarray_dtype_float32:
+      return DBL2NUM(*(float *)value_ptr);
+    case ndarray_dtype_float64:
+      return DBL2NUM(*(double *)value_ptr);
+
+    default:
+      return Qnil;
+  }
+}
+
+static VALUE
+ndarray_md_aref(const ndarray_t *nar, ssize_t *indices)
+{
+  assert(nar != NULL);
+  assert(indices != NULL);
+
+  /* assume the size of indices equals to nar->ndim */
+  const ssize_t ndim = nar->ndim;
+
+  uint8_t *value_ptr = nar->data;
+  ssize_t i;
+  for (i = 0; i < ndim; ++i) {
+    value_ptr += indices[i] * nar->strides[i];
+  }
+
+  return ndarray_get_value(value_ptr, nar->dtype);
+}
+
+static VALUE
 ndarray_aref(int argc, VALUE *argv, VALUE obj)
 {
   ndarray_t *nar;
@@ -346,42 +400,28 @@ ndarray_aref(int argc, VALUE *argv, VALUE obj)
 
   const int item_size = SIZEOF_DTYPE(nar->dtype);
 
-  if (nar->ndim == 1) {
+  const ssize_t ndim = nar->ndim;
+  if (ndim == 1) {
     /* special case for 1-D array */
     ssize_t i = NUM2SSIZET(argv[0]);
     uint8_t *p = ((uint8_t *)nar->data) + i * item_size;
-    switch (nar->dtype) {
-      case ndarray_dtype_int8:
-        return INT2NUM(*(int8_t *)p);
-      case ndarray_dtype_uint8:
-        return UINT2NUM(*(uint8_t *)p);
-
-      case ndarray_dtype_int16:
-        return INT2NUM(*(int16_t *)p);
-      case ndarray_dtype_uint16:
-        return UINT2NUM(*(uint16_t *)p);
-
-      case ndarray_dtype_int32:
-        return LONG2NUM(*(int32_t *)p);
-      case ndarray_dtype_uint32:
-        return ULONG2NUM(*(uint32_t *)p);
-
-      case ndarray_dtype_int64:
-        return LL2NUM(*(int64_t *)p);
-      case ndarray_dtype_uint64:
-        return ULL2NUM(*(uint64_t *)p);
-
-      case ndarray_dtype_float32:
-        return DBL2NUM(*(float *)p);
-      case ndarray_dtype_float64:
-        return DBL2NUM(*(double *)p);
-
-      default:
-        return Qnil;
-    }
+    return ndarray_get_value(p, nar->dtype);
   }
 
-  rb_raise(rb_eNotImpError, "multi-dimensional aref is unsupported now");
+  ssize_t indices[MAX_INLINE_DIM] = { 0, };
+
+  if (ndim > MAX_INLINE_DIM) {
+    rb_raise(rb_eNotImpError, "ndim > %d is unsupported now", MAX_INLINE_DIM);
+  }
+
+  ssize_t i;
+  for (i = 0; i < ndim; ++i) {
+    indices[i] = NUM2SSIZET(argv[i]);
+  }
+
+  VALUE val = ndarray_md_aref(nar, indices);
+
+  return val;
 }
 
 static VALUE
