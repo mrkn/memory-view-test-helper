@@ -339,6 +339,7 @@ ndarray_get_shape(VALUE obj)
 static VALUE
 ndarray_get_value(const uint8_t *value_ptr, const ndarray_dtype_t dtype)
 {
+  assert(value_ptr != NULL);
   switch (dtype) {
     case ndarray_dtype_int8:
       return INT2NUM(*(int8_t *)value_ptr);
