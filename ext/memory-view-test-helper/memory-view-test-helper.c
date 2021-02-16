@@ -426,6 +426,51 @@ ndarray_aref(int argc, VALUE *argv, VALUE obj)
 }
 
 static VALUE
+ndarray_set_value(uint8_t *value_ptr, const ndarray_dtype_t dtype, const VALUE val)
+{
+  assert(value_ptr != NULL);
+  switch (dtype) {
+    case ndarray_dtype_int8:
+      *(int8_t *)value_ptr = NUM2INT8(val);
+      break;
+    case ndarray_dtype_uint8:
+      *(uint8_t *)value_ptr = NUM2UINT8(val);
+      break;
+
+    case ndarray_dtype_int16:
+      *(int16_t *)value_ptr = NUM2INT16(val);
+      break;
+    case ndarray_dtype_uint16:
+      *(uint16_t *)value_ptr = NUM2UINT16(val);
+      break;
+
+    case ndarray_dtype_int32:
+      *(int32_t *)value_ptr = NUM2INT32(val);
+    case ndarray_dtype_uint32:
+      *(uint32_t *)value_ptr = NUM2UINT32(val);
+
+    case ndarray_dtype_int64:
+      *(int64_t *)value_ptr = NUM2INT64(val);
+      break;
+    case ndarray_dtype_uint64:
+      *(uint64_t *)value_ptr = NUM2UINT64(val);
+      break;
+
+    case ndarray_dtype_float32:
+      *(float *)value_ptr = NUM2FLT(val);
+      break;
+    case ndarray_dtype_float64:
+      *(double *)value_ptr = NUM2DBL(val);
+      break;
+
+    default:
+      return Qnil;
+  }
+
+  return val;
+}
+
+static VALUE
 ndarray_aset(int argc, VALUE *argv, VALUE obj)
 {
   ndarray_t *nar;
@@ -444,45 +489,7 @@ ndarray_aset(int argc, VALUE *argv, VALUE obj)
     /* special case for 1-D array */
     ssize_t i = NUM2SSIZET(argv[0]);
     uint8_t *p = ((uint8_t *)nar->data) + i * item_size;
-    switch (nar->dtype) {
-      case ndarray_dtype_int8:
-        *(int8_t *)p = NUM2INT8(val);
-        break;
-      case ndarray_dtype_uint8:
-        *(uint8_t *)p = NUM2UINT8(val);
-        break;
-
-      case ndarray_dtype_int16:
-        *(int16_t *)p = NUM2INT16(val);
-        break;
-      case ndarray_dtype_uint16:
-        *(uint16_t *)p = NUM2UINT16(val);
-        break;
-
-      case ndarray_dtype_int32:
-        *(int32_t *)p = NUM2INT32(val);
-      case ndarray_dtype_uint32:
-        *(uint32_t *)p = NUM2UINT32(val);
-
-      case ndarray_dtype_int64:
-        *(int64_t *)p = NUM2INT64(val);
-        break;
-      case ndarray_dtype_uint64:
-        *(uint64_t *)p = NUM2UINT64(val);
-        break;
-
-      case ndarray_dtype_float32:
-        *(float *)p = NUM2FLT(val);
-        break;
-      case ndarray_dtype_float64:
-        *(double *)p = NUM2DBL(val);
-        break;
-
-      default:
-        return Qnil;
-    }
-
-    return val;
+    return ndarray_set_value(p, nar->dtype, val);
   }
 
   rb_raise(rb_eNotImpError, "multi-dimensional aset is unsupported now");
