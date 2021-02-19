@@ -97,6 +97,10 @@ num2flt(VALUE num)
 VALUE mMemoryViewTestHelper;
 VALUE cNDArray;
 
+static VALUE sym_row_major;
+static VALUE sym_column_major;
+static VALUE sym_auto;
+
 #define MAX_INLINE_DIM 32
 
 typedef enum {
@@ -190,20 +194,31 @@ typedef struct {
   ssize_t ndim;
   ssize_t *shape;
   ssize_t *strides;
+
+  VALUE base;
 } ndarray_t;
 
+static void ndarray_mark(void *);
 static void ndarray_free(void *);
 static size_t ndarray_memsize(const void *);
 
 static const rb_data_type_t ndarray_data_type = {
   "memory-view-test-helper/ndarray",
   {
-    0,
+    ndarray_mark,
     ndarray_free,
     ndarray_memsize,
   },
   0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
+
+static void
+ndarray_mark(void *ptr)
+{
+  ndarray_t *nar = (ndarray_t *)ptr;
+  if (nar->base)
+    rb_gc_mark(nar->base);
+}
 
 static void
 ndarray_free(void *ptr)
@@ -237,6 +252,7 @@ ndarray_s_allocate(VALUE klass)
   nar->ndim = 0;
   nar->shape = NULL;
   nar->strides = NULL;
+  nar->base = Qfalse;
   return obj;
 }
 
@@ -527,6 +543,91 @@ ndarray_aset(int argc, VALUE *argv, VALUE obj)
   return res;
 }
 
+static void
+check_order(VALUE order)
+{
+  if (order != sym_row_major && order != sym_column_major && order != sym_auto) {
+    rb_raise(rb_eArgError,
+             "order must be either :row_major, :column_major, or :auto (%"PRIsVALUE" given)",
+             order);
+  }
+}
+
+static VALUE
+ndarray_reshape_impl(VALUE base, VALUE new_shape_v, VALUE order)
+{
+  ndarray_t *nar_base;
+  TypedData_Get_Struct(base, ndarray_t, &ndarray_data_type, nar_base);
+
+  Check_Type(new_shape_v, T_ARRAY);
+  check_order(order);
+
+  if (order == sym_auto) {
+    rb_raise(rb_eNotImpError, ":auto order is not implemented");
+  }
+  else if (order == sym_column_major) {
+    rb_raise(rb_eNotImpError, ":column_major order is not implemented");
+  }
+
+  const ssize_t new_ndim = RARRAY_LEN(new_shape_v);
+
+  /* preparing the buffer for new_shape */
+
+  ssize_t inline_new_shape_buf[MAX_INLINE_DIM] = { 0, };
+  ssize_t *new_shape;
+
+  if (new_ndim > MAX_INLINE_DIM) {
+    rb_raise(rb_eNotImpError, "new_shape.size > %d is not supported", MAX_INLINE_DIM);
+  }
+  else {
+    new_shape = inline_new_shape_buf;
+  }
+
+  /* extracting new_shape */
+
+  ssize_t byte_size = SIZEOF_DTYPE(nar_base->dtype);
+  ssize_t i;
+  for (i = 0; i < new_ndim; ++i) {
+    ssize_t dim_size = NUM2SSIZET(RARRAY_AREF(new_shape_v, i));
+    if (dim_size <= 0) {
+      rb_raise(rb_eArgError, "zero or negative size is given in new_shape");
+    }
+    new_shape[i] = dim_size;
+    byte_size *= dim_size;
+  }
+  if (byte_size != nar_base->byte_size) {
+    rb_raise(rb_eArgError,
+             "new_shape is incompatible with the base shape (%"PRIsVALUE" for %"PRIsVALUE")",
+             new_shape_v, ndarray_get_shape(base));
+  }
+
+  /* preparing view array */
+
+  VALUE view = ndarray_s_allocate(CLASS_OF(base));
+
+  ndarray_t *nar;
+  TypedData_Get_Struct(view, ndarray_t, &ndarray_data_type, nar);
+
+  nar->data = nar_base->data;
+  nar->byte_size = nar_base->byte_size;
+  nar->dtype = nar_base->dtype;
+  nar->base = base;
+  nar->ndim = new_ndim;
+
+  if (new_shape == inline_new_shape_buf) {
+    nar->shape = ALLOC_N(ssize_t, new_ndim);
+    MEMCPY(nar->shape, new_shape, ssize_t, new_ndim);
+  }
+
+  nar->strides = ALLOC_N(ssize_t, new_ndim);
+
+  if (order == sym_row_major) {
+    ndarray_init_row_major_strides(nar->dtype, new_ndim, nar->shape, nar->strides);
+  }
+
+  return view;
+}
+
 void
 Init_memory_view_test_helper(void)
 {
@@ -542,6 +643,8 @@ Init_memory_view_test_helper(void)
   rb_define_method(cNDArray, "[]", ndarray_aref, -1);
   rb_define_method(cNDArray, "[]=", ndarray_aset, -1);
 
+  rb_define_private_method(cNDArray, "reshape_impl", ndarray_reshape_impl, 2);
+
   ndarray_dtype_ids[ndarray_dtype_int8] = rb_intern("int8");
   ndarray_dtype_ids[ndarray_dtype_uint8] = rb_intern("uint8");
   ndarray_dtype_ids[ndarray_dtype_int16] = rb_intern("int16");
@@ -552,6 +655,10 @@ Init_memory_view_test_helper(void)
   ndarray_dtype_ids[ndarray_dtype_uint64] = rb_intern("uint64");
   ndarray_dtype_ids[ndarray_dtype_float32] = rb_intern("float32");
   ndarray_dtype_ids[ndarray_dtype_float64] = rb_intern("float64");
+
+  sym_row_major = ID2SYM(rb_intern("row_major"));
+  sym_column_major = ID2SYM(rb_intern("column_major"));
+  sym_auto = ID2SYM(rb_intern("auto"));
 
   (void)ndarray_dtype_sizes; /* TODO: to be deleted */
 }

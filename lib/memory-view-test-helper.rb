@@ -154,5 +154,9 @@ module MemoryViewTestHelper
         "th"
       end
     end
+
+    def reshape(new_shape, order: :row_major)
+      reshape_impl(new_shape.to_ary, order.to_sym)
+    end
   end
 end
