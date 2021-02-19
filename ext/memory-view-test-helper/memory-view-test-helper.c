@@ -224,7 +224,7 @@ static void
 ndarray_free(void *ptr)
 {
   ndarray_t *nar = (ndarray_t *)ptr;
-  if (nar->data) xfree(nar->data);
+  if (!nar->base && nar->data) xfree(nar->data);
   if (nar->shape) xfree(nar->shape);
   if (nar->strides) xfree(nar->strides);
   xfree(nar);
