@@ -388,6 +388,18 @@ ndarray_get_value(const uint8_t *value_ptr, const ndarray_dtype_t dtype)
 }
 
 static VALUE
+ndarray_1d_aref(const ndarray_t *nar, ssize_t i)
+{
+  assert(nar != NULL);
+  assert(nar->ndim == 1);
+  assert(0 <= i);
+  assert(i < nar->shape[0]);
+
+  uint8_t *p = ((uint8_t *)nar->data) + i * nar->strides[0];
+  return ndarray_get_value(p, nar->dtype);
+}
+
+static VALUE
 ndarray_md_aref(const ndarray_t *nar, ssize_t *indices)
 {
   assert(nar != NULL);
@@ -415,30 +427,25 @@ ndarray_aref(int argc, VALUE *argv, VALUE obj)
     rb_raise(rb_eIndexError, "index dimension mismatched (%d for %"PRIdSIZE")", argc, nar->ndim);
   }
 
-  const int item_size = SIZEOF_DTYPE(nar->dtype);
-
   const ssize_t ndim = nar->ndim;
   if (ndim == 1) {
-    /* special case for 1-D array */
-    ssize_t i = NUM2SSIZET(argv[0]);
-    uint8_t *p = ((uint8_t *)nar->data) + i * item_size;
-    return ndarray_get_value(p, nar->dtype);
+    const ssize_t i = NUM2SSIZET(argv[0]);
+    return ndarray_1d_aref(nar, i);
   }
+  else {
+    ssize_t indices[MAX_INLINE_DIM] = { 0, };
 
-  ssize_t indices[MAX_INLINE_DIM] = { 0, };
+    if (ndim > MAX_INLINE_DIM) {
+      rb_raise(rb_eNotImpError, "ndim > %d is unsupported now", MAX_INLINE_DIM);
+    }
 
-  if (ndim > MAX_INLINE_DIM) {
-    rb_raise(rb_eNotImpError, "ndim > %d is unsupported now", MAX_INLINE_DIM);
+    ssize_t i;
+    for (i = 0; i < ndim; ++i) {
+      indices[i] = NUM2SSIZET(argv[i]);
+    }
+
+    return ndarray_md_aref(nar, indices);
   }
-
-  ssize_t i;
-  for (i = 0; i < ndim; ++i) {
-    indices[i] = NUM2SSIZET(argv[i]);
-  }
-
-  VALUE val = ndarray_md_aref(nar, indices);
-
-  return val;
 }
 
 static VALUE
@@ -543,6 +550,102 @@ ndarray_aset(int argc, VALUE *argv, VALUE obj)
   return res;
 }
 
+static int
+increment_indices(const ndarray_t *nar, ssize_t *indices)
+{
+  assert(nar != NULL);
+  assert(indices != NULL);
+
+  ssize_t i = nar->ndim - 1;
+  if (indices[i] + 1 < nar->shape[i]) {
+    ++indices[i];
+    return 0;
+  }
+  else {
+    indices[i] = 0;
+    for (--i; i >= 0; --i) {
+      if (indices[i] + 1 == nar->shape[i]) {
+        indices[i] = 0;
+      }
+      else {
+        ++indices[i];
+        return 0;
+      }
+    }
+    return 1; /* overflow */
+  }
+}
+
+static VALUE
+ndarray_md_eq(const ndarray_t *nar1, const ndarray_t *nar2)
+{
+  assert(nar1 != NULL);
+  assert(nar2 != NULL);
+  assert(nar1->ndim == nar2->ndim);
+
+  const ssize_t ndim = nar1->ndim;
+  ssize_t n_items = 1;
+  ssize_t i;
+  for (i = 0; i < ndim; ++i) {
+    if (nar1->shape[i] != nar2->shape[i])
+      return Qfalse;
+
+    n_items *= nar1->shape[i];
+  }
+
+  ssize_t indices[MAX_INLINE_DIM] = { 0, };
+  if (ndim > MAX_INLINE_DIM) {
+    rb_raise(rb_eNotImpError, "ndim > %d is unsupported now", MAX_INLINE_DIM);
+  }
+
+  ssize_t n = 0;
+  for (; n < n_items; ++n) {
+    VALUE v1 = ndarray_md_aref(nar1, indices);
+    VALUE v2 = ndarray_md_aref(nar2, indices);
+    if (!rb_equal(v1, v2))
+      return Qfalse;
+
+    increment_indices(nar1, indices);
+  }
+
+  return Qtrue;
+}
+
+static VALUE
+ndarray_eq(VALUE obj, VALUE other)
+{
+  if (!rb_typeddata_is_kind_of(other, &ndarray_data_type)) {
+    return Qfalse;
+  }
+
+  ndarray_t *nar1, *nar2;
+  TypedData_Get_Struct(obj, ndarray_t, &ndarray_data_type, nar1);
+  TypedData_Get_Struct(other, ndarray_t, &ndarray_data_type, nar2);
+
+  const ssize_t ndim = nar1->ndim;
+  if (ndim != nar2->ndim)
+    return Qfalse;
+
+  if (ndim == 1) {
+    const ssize_t n = nar1->shape[0];
+    if (n != nar2->shape[0])
+      return Qfalse;
+
+    ssize_t i;
+    for (i = 0; i < n; ++i) {
+      VALUE v1 = ndarray_1d_aref(nar1, i);
+      VALUE v2 = ndarray_1d_aref(nar2, i);
+      if (!rb_equal(v1, v2))
+        return Qfalse;
+    }
+
+    return Qtrue;
+  }
+  else {
+    return ndarray_md_eq(nar1, nar2);
+  }
+}
+
 static void
 check_order(VALUE order)
 {
@@ -642,6 +745,7 @@ Init_memory_view_test_helper(void)
   rb_define_method(cNDArray, "shape", ndarray_get_shape, 0);
   rb_define_method(cNDArray, "[]", ndarray_aref, -1);
   rb_define_method(cNDArray, "[]=", ndarray_aset, -1);
+  rb_define_method(cNDArray, "==", ndarray_eq, 1);
 
   rb_define_private_method(cNDArray, "reshape_impl", ndarray_reshape_impl, 2);
 
