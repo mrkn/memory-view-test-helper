@@ -433,10 +433,12 @@ ndarray_aref(int argc, VALUE *argv, VALUE obj)
     return ndarray_1d_aref(nar, i);
   }
   else {
-    ssize_t indices[MAX_INLINE_DIM] = { 0, };
+    ssize_t inline_indices_buf[MAX_INLINE_DIM] = { 0, };
+    ssize_t *indices = inline_indices_buf;
 
+    VALUE heap_indices_buf = 0;
     if (ndim > MAX_INLINE_DIM) {
-      rb_raise(rb_eNotImpError, "ndim > %d is unsupported now", MAX_INLINE_DIM);
+      indices = RB_ALLOCV_N(ssize_t, heap_indices_buf, ndim);
     }
 
     ssize_t i;
@@ -444,7 +446,9 @@ ndarray_aref(int argc, VALUE *argv, VALUE obj)
       indices[i] = NUM2SSIZET(argv[i]);
     }
 
-    return ndarray_md_aref(nar, indices);
+    VALUE res = ndarray_md_aref(nar, indices);
+    RB_ALLOCV_END(heap_indices_buf);
+    return res;
   }
 }
 
@@ -533,21 +537,24 @@ ndarray_aset(int argc, VALUE *argv, VALUE obj)
     uint8_t *p = ((uint8_t *)nar->data) + i * item_size;
     return ndarray_set_value(p, nar->dtype, val);
   }
+  else {
+    ssize_t inline_indices_buf[MAX_INLINE_DIM] = { 0, };
+    ssize_t *indices = inline_indices_buf;
 
-  ssize_t indices[MAX_INLINE_DIM] = { 0, };
+    VALUE heap_indices_buf = 0;
+    if (ndim > MAX_INLINE_DIM) {
+      indices = RB_ALLOCV_N(ssize_t, heap_indices_buf, ndim);
+    }
 
-  if (ndim > MAX_INLINE_DIM) {
-    rb_raise(rb_eNotImpError, "ndim > %d is unsupported now", MAX_INLINE_DIM);
+    ssize_t i;
+    for (i = 0; i < ndim; ++i) {
+      indices[i] = NUM2SSIZET(argv[i]);
+    }
+
+    VALUE res = ndarray_md_aset(nar, indices, val);
+    RB_ALLOCV_END(heap_indices_buf);
+    return res;
   }
-
-  ssize_t i;
-  for (i = 0; i < ndim; ++i) {
-    indices[i] = NUM2SSIZET(argv[i]);
-  }
-
-  VALUE res = ndarray_md_aset(nar, indices, val);
-
-  return res;
 }
 
 static int
@@ -593,28 +600,38 @@ ndarray_md_eq(const ndarray_t *nar1, const ndarray_t *nar2)
     n_items *= nar1->shape[i];
   }
 
-  ssize_t indices[MAX_INLINE_DIM] = { 0, };
+  ssize_t inline_indices_buf[MAX_INLINE_DIM] = { 0, };
+  ssize_t *indices = inline_indices_buf;
+
+  VALUE heap_indices_buf = 0;
   if (ndim > MAX_INLINE_DIM) {
-    rb_raise(rb_eNotImpError, "ndim > %d is unsupported now", MAX_INLINE_DIM);
+    indices = RB_ALLOCV_N(ssize_t, heap_indices_buf, ndim);
+    MEMZERO(indices, ssize_t, ndim);
   }
 
   ssize_t n = 0;
+  VALUE res = Qtrue;
   for (; n < n_items; ++n) {
     VALUE v1 = ndarray_md_aref(nar1, indices);
     VALUE v2 = ndarray_md_aref(nar2, indices);
-    if (!rb_equal(v1, v2))
-      return Qfalse;
+    if (!rb_equal(v1, v2)) {
+      res = Qfalse;
+      break;
+    }
 
     increment_indices(nar1, indices);
   }
 
-  return Qtrue;
+  RB_ALLOCV_END(heap_indices_buf);
+  return res;
 }
 
 static VALUE
 ndarray_eq(VALUE obj, VALUE other)
 {
-  if (!rb_typeddata_is_kind_of(other, &ndarray_data_type)) {
+  if (obj == other)
+    return Qtrue;
+  else if (!rb_typeddata_is_kind_of(other, &ndarray_data_type)) {
     return Qfalse;
   }
 
@@ -659,6 +676,12 @@ check_order(VALUE order)
 static VALUE
 ndarray_reshape_impl(VALUE base, VALUE new_shape_v, VALUE order)
 {
+  enum {
+    nothing,
+    zero_or_negative_size_in_shape,
+    incompatible_new_shape,
+  } failure_reason = nothing;
+
   ndarray_t *nar_base;
   TypedData_Get_Struct(base, ndarray_t, &ndarray_data_type, nar_base);
 
@@ -677,13 +700,10 @@ ndarray_reshape_impl(VALUE base, VALUE new_shape_v, VALUE order)
   /* preparing the buffer for new_shape */
 
   ssize_t inline_new_shape_buf[MAX_INLINE_DIM] = { 0, };
-  ssize_t *new_shape;
+  ssize_t *new_shape = inline_new_shape_buf;
 
   if (new_ndim > MAX_INLINE_DIM) {
-    rb_raise(rb_eNotImpError, "new_shape.size > %d is not supported", MAX_INLINE_DIM);
-  }
-  else {
-    new_shape = inline_new_shape_buf;
+    new_shape = ALLOC_N(ssize_t, new_ndim);
   }
 
   /* extracting new_shape */
@@ -693,15 +713,16 @@ ndarray_reshape_impl(VALUE base, VALUE new_shape_v, VALUE order)
   for (i = 0; i < new_ndim; ++i) {
     ssize_t dim_size = NUM2SSIZET(RARRAY_AREF(new_shape_v, i));
     if (dim_size <= 0) {
-      rb_raise(rb_eArgError, "zero or negative size is given in new_shape");
+      failure_reason = zero_or_negative_size_in_shape;
+      goto finish;
     }
     new_shape[i] = dim_size;
     byte_size *= dim_size;
   }
+
   if (byte_size != nar_base->byte_size) {
-    rb_raise(rb_eArgError,
-             "new_shape is incompatible with the base shape (%"PRIsVALUE" for %"PRIsVALUE")",
-             new_shape_v, ndarray_get_shape(base));
+    failure_reason = incompatible_new_shape;
+    goto finish;
   }
 
   /* preparing view array */
@@ -721,11 +742,34 @@ ndarray_reshape_impl(VALUE base, VALUE new_shape_v, VALUE order)
     nar->shape = ALLOC_N(ssize_t, new_ndim);
     MEMCPY(nar->shape, new_shape, ssize_t, new_ndim);
   }
+  else {
+    nar->shape = new_shape;
+  }
 
   nar->strides = ALLOC_N(ssize_t, new_ndim);
 
   if (order == sym_row_major) {
     ndarray_init_row_major_strides(nar->dtype, new_ndim, nar->shape, nar->strides);
+  }
+
+finish:
+  if (failure_reason != nothing) {
+    if (new_shape && new_shape != inline_new_shape_buf) {
+      xfree(new_shape);
+    }
+  }
+
+  switch (failure_reason) {
+    case zero_or_negative_size_in_shape:
+      rb_raise(rb_eArgError, "zero or negative size is given in new_shape");
+
+    case incompatible_new_shape:
+      rb_raise(rb_eArgError,
+               "new_shape is incompatible with the base shape (%"PRIsVALUE" for %"PRIsVALUE")",
+               new_shape_v, ndarray_get_shape(base));
+
+    default:
+      break;
   }
 
   return view;
