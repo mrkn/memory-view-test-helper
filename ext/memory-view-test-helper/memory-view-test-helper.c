@@ -353,6 +353,25 @@ ndarray_get_shape(VALUE obj)
 }
 
 static VALUE
+ndarray_get_strides(VALUE obj)
+{
+  ndarray_t *nar;
+  TypedData_Get_Struct(obj, ndarray_t, &ndarray_data_type, nar);
+
+  if (nar->strides == NULL) {
+    return rb_ary_new_capa(0);
+  }
+
+  VALUE ary = rb_ary_new_capa(nar->ndim);
+  int i;
+  for (i = 0; i < nar->ndim; ++i) {
+    rb_ary_push(ary, SSIZET2NUM(nar->strides[i]));
+  }
+
+  return ary;
+}
+
+static VALUE
 ndarray_get_value(const uint8_t *value_ptr, const ndarray_dtype_t dtype)
 {
   assert(value_ptr != NULL);
@@ -787,6 +806,7 @@ Init_memory_view_test_helper(void)
   rb_define_method(cNDArray, "dtype", ndarray_get_dtype, 0);
   rb_define_method(cNDArray, "ndim", ndarray_get_ndim, 0);
   rb_define_method(cNDArray, "shape", ndarray_get_shape, 0);
+  rb_define_method(cNDArray, "strides", ndarray_get_strides, 0);
   rb_define_method(cNDArray, "[]", ndarray_aref, -1);
   rb_define_method(cNDArray, "[]=", ndarray_aset, -1);
   rb_define_method(cNDArray, "==", ndarray_eq, 1);
