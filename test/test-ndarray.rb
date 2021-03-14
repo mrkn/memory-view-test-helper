@@ -49,15 +49,18 @@ class NDArrayTest < Test::Unit::TestCase
       test("with order: :row_major") do
         ary = MemoryViewTestHelper::NDArray.try_convert(@items, dtype: :float64, order: :row_major)
         actual_items = 0.upto(2).map {|i| [ary[i, 0], ary[i, 1]] }
-        assert_equal({ shape: [3, 2],    ndim: 2,        dtype: :float64,  byte_size: 48,            items: @items.map {|row| row.map(&:to_f) } },
-                     { shape: ary.shape, ndim: ary.ndim, dtype: ary.dtype, byte_size: ary.byte_size, items: actual_items })
+        strides = [2*ary.item_size, ary.item_size ]
+        assert_equal({ shape: [3, 2],    strides: strides,     ndim: 2,        dtype: :float64,  byte_size: 48,            items: @items.map {|row| row.map(&:to_f) } },
+                     { shape: ary.shape, strides: ary.strides, ndim: ary.ndim, dtype: ary.dtype, byte_size: ary.byte_size, items: actual_items })
       end
 
       test("with order: :column_major") do
         ary1 = MemoryViewTestHelper::NDArray.try_convert(@items, dtype: :float64, order: :column_major)
         ary2 = MemoryViewTestHelper::NDArray.try_convert(@items, dtype: :float64, order: :row_major)
-        assert_equal({ equality: true,         strides: false },
-                     { equality: ary1 == ary2, strides: ary1.strides == ary2.strides })
+        actual_items = 0.upto(2).map {|i| [ary1[i, 0], ary1[i, 1]] }
+        strides = [ary1.item_size, 3*ary1.item_size ]
+        assert_equal({ equality: true,         strides: strides,      items: @items.map {|row| row.map(&:to_f) } },
+                     { equality: ary1 == ary2, strides: ary1.strides, items: actual_items })
       end
 
       test("without order") do

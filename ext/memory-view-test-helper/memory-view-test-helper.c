@@ -142,7 +142,7 @@ static ID ndarray_dtype_ids[NDARRAY_NUM_DTYPES];
 #define DTYPE_ID(type) (*(const ID *)(&ndarray_dtype_ids[type]))
 
 static ndarray_dtype_t
-ndarray_id_to_dtype_t(ID id)
+ndarray_id_to_dtype_t(ID id, VALUE orig)
 {
   int i;
   for (i = 0; i < NDARRAY_NUM_DTYPES; ++i) {
@@ -150,19 +150,19 @@ ndarray_id_to_dtype_t(ID id)
       return (ndarray_dtype_t)i;
     }
   }
-  rb_raise(rb_eArgError, "unknown dtype: %"PRIsVALUE, ID2SYM(id));
+  rb_raise(rb_eArgError, "unknown dtype (%+"PRIsVALUE")", orig);
 }
 
 static ndarray_dtype_t
-ndarray_sym_to_dtype_t(VALUE sym)
+ndarray_sym_to_dtype_t(VALUE sym, VALUE orig)
 {
   assert(RB_TYPE_P(sym, T_SYMBOL));
   ID id = SYM2ID(sym);
-  return ndarray_id_to_dtype_t(id);
+  return ndarray_id_to_dtype_t(id, orig);
 }
 
-static ndarray_dtype_t
-ndarray_obj_to_dtype_t(VALUE obj)
+static inline VALUE
+param_to_symbol(VALUE obj, const char *name)
 {
   while (!RB_TYPE_P(obj, T_SYMBOL)) {
     if (RB_TYPE_P(obj, T_STRING) || rb_respond_to(obj, rb_intern("to_sym"))) {
@@ -180,10 +180,47 @@ ndarray_obj_to_dtype_t(VALUE obj)
       }
     }
   }
-  return ndarray_sym_to_dtype_t(obj);
+  return obj;
 
 type_error:
-  rb_raise(rb_eTypeError, "dtype must be a symbol");
+  rb_raise(rb_eTypeError, "%s must be a symbol", name);
+}
+
+static ndarray_dtype_t
+ndarray_obj_to_dtype_t(VALUE obj)
+{
+  VALUE sym = param_to_symbol(obj, "dtype");
+  return ndarray_sym_to_dtype_t(sym, obj);
+}
+
+typedef enum {
+  ndarray_order_auto,
+  ndarray_order_row_major,
+  ndarray_order_column_major
+} ndarray_order_t;
+
+static ndarray_order_t
+ndarray_sym_to_order_t(VALUE sym, VALUE orig)
+{
+  assert(RB_TYPE_P(sym, T_SYMBOL));
+  if (sym == sym_row_major) {
+    return ndarray_order_row_major;
+  }
+  if (sym == sym_column_major) {
+    return ndarray_order_column_major;
+  }
+  if (sym == sym_auto) {
+    return ndarray_order_auto;
+  }
+
+  rb_raise(rb_eArgError, "invalid order value (%+"PRIsVALUE")", orig);
+}
+
+static ndarray_order_t
+ndarray_obj_to_order_t(VALUE obj)
+{
+  VALUE sym = param_to_symbol(obj, "dtype");
+  return ndarray_sym_to_order_t(sym, obj);
 }
 
 typedef struct {
@@ -269,8 +306,21 @@ ndarray_init_row_major_strides(const ndarray_dtype_t dtype, const ssize_t ndim,
   }
 }
 
+static void
+ndarray_init_column_major_strides(const ndarray_dtype_t dtype, const ssize_t ndim,
+                                  const ssize_t *shape, ssize_t *out_strides)
+{
+  const ssize_t item_size = SIZEOF_DTYPE(dtype);
+  out_strides[0] = item_size;
+
+  int i;
+  for (i = 0; i < ndim - 1; ++i) {
+    out_strides[i + 1] = out_strides[i] * shape[i];
+  }
+}
+
 static VALUE
-ndarray_initialize(VALUE obj, VALUE shape_ary, VALUE dtype_name)
+ndarray_initialize(VALUE obj, VALUE shape_ary, VALUE dtype_name, VALUE order_name)
 {
   int i;
 
@@ -289,14 +339,26 @@ ndarray_initialize(VALUE obj, VALUE shape_ary, VALUE dtype_name)
   }
 
   ndarray_dtype_t dtype = ndarray_obj_to_dtype_t(dtype_name);
+  ndarray_order_t order = ndarray_obj_to_order_t(order_name);
 
   ssize_t *strides = ALLOC_N(ssize_t, ndim);
-  ndarray_init_row_major_strides(dtype, ndim, shape, strides);
+  ssize_t byte_size;
+  switch (order) {
+    case ndarray_order_auto:
+    case ndarray_order_row_major:
+      ndarray_init_row_major_strides(dtype, ndim, shape, strides);
+      byte_size = strides[0] * shape[0];
+      break;
+
+    default:
+      ndarray_init_column_major_strides(dtype, ndim, shape, strides);
+      byte_size = strides[ndim-1] * shape[ndim-1];
+      break;
+  }
 
   ndarray_t *nar;
   TypedData_Get_Struct(obj, ndarray_t, &ndarray_data_type, nar);
 
-  ssize_t byte_size = strides[0] * shape[0];
   nar->data = ALLOC_N(uint8_t, byte_size);
   nar->byte_size = byte_size;
   nar->dtype = dtype;
@@ -801,7 +863,7 @@ Init_memory_view_test_helper(void)
   cNDArray = rb_define_class_under(mMemoryViewTestHelper, "NDArray", rb_cObject);
 
   rb_define_alloc_func(cNDArray, ndarray_s_allocate);
-  rb_define_method(cNDArray, "initialize", ndarray_initialize, 2);
+  rb_define_method(cNDArray, "initialize", ndarray_initialize, 3);
   rb_define_method(cNDArray, "byte_size", ndarray_get_byte_size, 0);
   rb_define_method(cNDArray, "dtype", ndarray_get_dtype, 0);
   rb_define_method(cNDArray, "ndim", ndarray_get_ndim, 0);

@@ -4,6 +4,14 @@ require "set"
 
 module MemoryViewTestHelper
   class NDArray
+    class << self
+      alias __new__ new
+    end
+
+    def self.new(shape, dtype, order: :row_major)
+      __new__(shape, dtype, order)
+    end
+
     def self.try_convert(obj, dtype: nil, order: :row_major)
       begin
         ary = obj.to_ary
@@ -12,7 +20,7 @@ module MemoryViewTestHelper
       end
 
       dtype, shape, cache = detect_dtype_and_shape(ary, dtype)
-      nar = new(shape, dtype)
+      nar = __new__(shape, dtype, order)
       assign_cache(nar, cache)
       return nar
     end
@@ -153,6 +161,10 @@ module MemoryViewTestHelper
       else
         "th"
       end
+    end
+
+    def item_size
+      SIZEOF_DTYPE[dtype]
     end
 
     def reshape(new_shape, order: :row_major)
